@@ -38,6 +38,7 @@
             this.toolStripMenuItem3 = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripMenuItem4 = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripMenuItem2 = new System.Windows.Forms.ToolStripMenuItem();
+            this.currentStateLabel = new System.Windows.Forms.Label();
             this.menuStrip1.SuspendLayout();
             this.SuspendLayout();
             // 
@@ -93,7 +94,7 @@
             this.toolStripMenuItem2});
             this.menuStrip1.Location = new System.Drawing.Point(0, 0);
             this.menuStrip1.Name = "menuStrip1";
-            this.menuStrip1.Size = new System.Drawing.Size(217, 24);
+            this.menuStrip1.Size = new System.Drawing.Size(227, 24);
             this.menuStrip1.TabIndex = 4;
             this.menuStrip1.Text = "menuStrip1";
             // 
@@ -126,11 +127,20 @@
             this.toolStripMenuItem2.Size = new System.Drawing.Size(39, 20);
             this.toolStripMenuItem2.Text = "Edit";
             // 
+            // currentStateLabel
+            // 
+            this.currentStateLabel.AutoSize = true;
+            this.currentStateLabel.Location = new System.Drawing.Point(12, 134);
+            this.currentStateLabel.Name = "currentStateLabel";
+            this.currentStateLabel.Size = new System.Drawing.Size(0, 15);
+            this.currentStateLabel.TabIndex = 5;
+            // 
             // Form1
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 15F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(217, 128);
+            this.ClientSize = new System.Drawing.Size(227, 158);
+            this.Controls.Add(this.currentStateLabel);
             this.Controls.Add(this.eventsProgressLabel);
             this.Controls.Add(this.replayProgressBar);
             this.Controls.Add(this.label1);
@@ -158,6 +168,7 @@
         private System.Windows.Forms.ToolStripMenuItem toolStripMenuItem2;
         private System.Windows.Forms.ToolStripMenuItem toolStripMenuItem3;
         private System.Windows.Forms.ToolStripMenuItem toolStripMenuItem4;
+        private System.Windows.Forms.Label currentStateLabel;
     }
 }
 

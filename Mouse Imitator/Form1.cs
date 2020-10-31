@@ -9,28 +9,32 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Resources;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using MouseImitator.Application;
 
 namespace Mouse_Imitator
 {
     public partial class Form1 : Form, IDeviceEventListener
     {
+        private const int WhKeyboardLl = 13;
+        private const int WmKeydown = 0x0100;
 
-        private MouseHook _mouseHook;
+        private static IntPtr _hookId = IntPtr.Zero;
+
+        private readonly MouseHook _mouseHook;
+        private readonly LowLevelKeyboardProc _proc;
+
+        private Thread _workerThread;
+
         private MouseEventList _mouseEvents;
-        private bool recording;
-        private bool replaying;
-        private Thread workerThread;
-
-        private const int WH_KEYBOARD_LL = 13;
-        private const int WM_KEYDOWN = 0x0100;
-        private LowLevelKeyboardProc _proc;
-        private static IntPtr _hookID = IntPtr.Zero;
+        private State _currentState;
 
 
         public Form1()
@@ -43,65 +47,91 @@ namespace Mouse_Imitator
             this.TopMost = true;
             // Note: for the application hook, use the Hook.AppEvents() instead
             _mouseHook = new MouseHook();
-            _proc = HookCallback;
-            replayButton.Enabled = false;
+            this._proc = HookCallback;
+            this.replayButton.Enabled = false;
 
             _mouseHook.Register(this);
 
-            toolStripMenuItem3.Click += ToolStripMenuItem3_Click;
-            toolStripMenuItem4.Click += ToolStripMenuItem4_Click;
-
+            toolStripMenuItem3.Click += SaveMenuItem_Click;
+            toolStripMenuItem4.Click += LoadMenuItem_Click;
         }
 
-        private void ToolStripMenuItem4_Click(object sender, EventArgs e)
+        private void LoadMenuItem_Click(object sender, EventArgs e)
         {
-            var serializedEvents = File.ReadAllText("events.dat");
+            var filter = TextResources.files_filter;
+            using var openFileDialog = new OpenFileDialog
+            {
+                Filter = filter,
+                FilterIndex = 1,
+                RestoreDirectory = true
+            };
+
+            if (openFileDialog.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            var fileName = openFileDialog.FileName;
+            var serializedEvents = File.ReadAllText(fileName);
             _mouseEvents = DeserializeFromString<MouseEventList>(serializedEvents);
 
             replayButton.Enabled = _mouseEvents.GetCount() > 0;
         }
 
-        private void ToolStripMenuItem3_Click(object sender, EventArgs e)
+        private void SaveMenuItem_Click(object sender, EventArgs e)
         {
+            var filter = TextResources.files_filter;
+
+            using var saveFileDialog = new SaveFileDialog
+            {
+                Filter = filter,
+                FilterIndex = 1,
+                RestoreDirectory = true,
+                CheckFileExists = false
+            };
+
+            if (saveFileDialog.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            var fileName = saveFileDialog.FileName;
             var serializedEvents = SerializeToString(_mouseEvents);
-            File.WriteAllText("events.dat", serializedEvents);
+            File.WriteAllText(fileName, serializedEvents);
         }
 
         private static IntPtr SetHook(LowLevelKeyboardProc proc)
         {
-            using (Process curProcess = Process.GetCurrentProcess())
-            using (ProcessModule curModule = curProcess.MainModule)
-            {
-                return SetWindowsHookEx(WH_KEYBOARD_LL, proc,
-                    GetModuleHandle(curModule.ModuleName), 0);
-            }
+            using Process curProcess = Process.GetCurrentProcess();
+            using ProcessModule curModule = curProcess.MainModule;
+            return SetWindowsHookEx(WhKeyboardLl, proc,
+                GetModuleHandle(curModule.ModuleName), 0);
         }
 
         private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
-            if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
+            if (nCode >= 0 && wParam == (IntPtr) WmKeydown)
             {
                 int vkCode = Marshal.ReadInt32(lParam);
 
-                if ((Keys)vkCode == Keys.F6)
+                if ((Keys) vkCode == Keys.F6)
                 {
-
-                    performReplay();
+                    PerformReplay();
                 }
-                else if ((Keys)vkCode == Keys.F7)
+                else if ((Keys) vkCode == Keys.F7)
                 {
-
-                    performRecord();
+                    PerformRecord();
                 }
             }
 
-            return CallNextHookEx(_hookID, nCode, wParam, lParam);
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod,
+            uint dwThreadId);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -115,18 +145,17 @@ namespace Mouse_Imitator
 
         private void Form1_Disposed(object sender, EventArgs e)
         {
-
             //m_GlobalHook.KeyPress -= GlobalHookKeyPress;
             Unsubscribe();
 
-            //It is recommened to dispose it
+            //It is recommended to dispose it
             _mouseHook.Dispose();
-            UnhookWindowsHookEx(_hookID);
+            UnhookWindowsHookEx(_hookId);
         }
 
         private void Form1_Shown(object sender, EventArgs e)
         {
-            _hookID = SetHook(_proc);
+            _hookId = SetHook(_proc);
             //Subscribe();
 
             // m_GlobalHook.KeyPress += GlobalHookKeyPress;
@@ -141,16 +170,16 @@ namespace Mouse_Imitator
             switch (button)
             {
                 case IMouseEvent.EventButton.LEFT:
-                    mouse_event((uint)MouseEventFlags.LEFTDOWN, 0, 0, 0, 0);
-                    mouse_event((uint)MouseEventFlags.LEFTUP, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.LEFTDOWN, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.LEFTUP, 0, 0, 0, 0);
                     break;
                 case IMouseEvent.EventButton.RIGHT:
-                    mouse_event((uint)MouseEventFlags.RIGHTDOWN, 0, 0, 0, 0);
-                    mouse_event((uint)MouseEventFlags.RIGHTUP, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.RIGHTDOWN, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.RIGHTUP, 0, 0, 0, 0);
                     break;
                 case IMouseEvent.EventButton.MIDDLE:
-                    mouse_event((uint)MouseEventFlags.MIDDLEDOWN, 0, 0, 0, 0);
-                    mouse_event((uint)MouseEventFlags.MIDDLEUP, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.MIDDLEDOWN, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.MIDDLEUP, 0, 0, 0, 0);
                     break;
             }
         }
@@ -160,13 +189,13 @@ namespace Mouse_Imitator
             switch (button)
             {
                 case IMouseEvent.EventButton.LEFT:
-                    mouse_event((uint)MouseEventFlags.LEFTDOWN, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.LEFTDOWN, 0, 0, 0, 0);
                     break;
                 case IMouseEvent.EventButton.RIGHT:
-                    mouse_event((uint)MouseEventFlags.RIGHTDOWN, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.RIGHTDOWN, 0, 0, 0, 0);
                     break;
                 case IMouseEvent.EventButton.MIDDLE:
-                    mouse_event((uint)MouseEventFlags.MIDDLEDOWN, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.MIDDLEDOWN, 0, 0, 0, 0);
                     break;
             }
         }
@@ -176,13 +205,13 @@ namespace Mouse_Imitator
             switch (button)
             {
                 case IMouseEvent.EventButton.LEFT:
-                    mouse_event((uint)MouseEventFlags.LEFTUP, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.LEFTUP, 0, 0, 0, 0);
                     break;
                 case IMouseEvent.EventButton.RIGHT:
-                    mouse_event((uint)MouseEventFlags.RIGHTUP, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.RIGHTUP, 0, 0, 0, 0);
                     break;
                 case IMouseEvent.EventButton.MIDDLE:
-                    mouse_event((uint)MouseEventFlags.MIDDLEUP, 0, 0, 0, 0);
+                    mouse_event((uint) MouseEventFlags.MIDDLEUP, 0, 0, 0, 0);
                     break;
             }
         }
@@ -202,6 +231,7 @@ namespace Mouse_Imitator
 
         [DllImport("user32")]
         public static extern int SetCursorPos(int x, int y);
+
         [DllImport("user32.dll")]
         static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo);
 
@@ -215,142 +245,204 @@ namespace Mouse_Imitator
             _mouseHook.StopListening();
         }
 
-        private void performReplay()
+        private bool HasMouseEvents()
         {
+            return _mouseEvents.GetCount() > 0;
+        }
 
-            if (_mouseEvents.GetCount() < 1)
+        private void PerformReplay()
+        {
+            if (!HasMouseEvents())
             {
                 return;
             }
 
-            replaying = !replaying;
-
-            if (replaying)
+            if (IsIdle())
             {
-                replayButton.Text = "Stop Replaying";
+
+                Reset();
+
+                replayButton.Text = TextResources.stop_replaying;
                 recordButton.Enabled = false;
 
-                this.workerThread = new Thread(new ThreadStart(this.replay));
-                this.workerThread.Start();
+                this._workerThread = new Thread(new ThreadStart(this.Replay));
+                this._workerThread.Start();
+
+                UpdateState(State.REPLAYING);
             }
-            else
+            else if (IsReplaying())
             {
-                workerThread.Interrupt();
-                replayButton.Text = "Replay";
+                _workerThread.Interrupt();
+                replayButton.Text = TextResources.replay;
                 recordButton.Enabled = true;
+
+                UpdateState(State.IDLE);
+
+                //We don't want to reset the UI here, maybe the user wants to view where he stopped
             }
+        }
+
+        private void Reset()
+        {
+
+            label1.Invoke((MethodInvoker)(() => label1.Text = TextResources.no_replays));
+            replayProgressBar.Invoke((MethodInvoker)(() =>
+            {
+                replayProgressBar.Value = 0;
+                eventsProgressLabel.Text = null;
+            }));
+        }
+
+        private void UpdateState(State newState)
+        {
+            _currentState = newState;
+
+            var stateText = TextResources.idle;
+
+            switch (_currentState)
+            {
+                case State.RECORDING:
+                    stateText = TextResources.recording;
+                    break;
+                case State.REPLAYING:
+                    stateText = TextResources.replaying;
+                    break;
+            }
+
+            currentStateLabel.Text = stateText;
+
+        }
+
+        private bool IsRecording()
+        {
+            return _currentState == State.RECORDING;
+        }
+
+        private bool IsIdle()
+        {
+            return _currentState == State.IDLE;
+        }
+
+        private bool IsReplaying()
+        {
+            return _currentState == State.REPLAYING;
         }
 
         private void replayButton_Click(object sender, EventArgs e)
         {
-            if (recording)
+            if (IsRecording())
             {
                 return;
             }
 
-            performReplay();
+            PerformReplay();
         }
 
-        private void replay()
+        private void Replay()
         {
-
-            replayProgressBar.Invoke((MethodInvoker)(() =>
-            {
-                replayProgressBar.Maximum = _mouseEvents.GetCount();
-            }));
+            replayProgressBar.Invoke((MethodInvoker) (() => { replayProgressBar.Maximum = _mouseEvents.GetCount(); }));
 
             long i = 0;
             do
             {
-                IEnumerable<LinkedMouseEvent> enumerable = _mouseEvents.GetEvents();
-                IEnumerator<LinkedMouseEvent> enumerator = enumerable.GetEnumerator();
-
-                int replayProgress = 0;
-
-                while (enumerator.MoveNext())
+                lock (_mouseEvents)
                 {
-                    var ev = enumerator.Current;
-                    long timeDiff = ev.GetTimeDifference();
+                    IEnumerable<LinkedMouseEvent> enumerable = _mouseEvents.GetEvents();
+                    using IEnumerator<LinkedMouseEvent> enumerator = enumerable.GetEnumerator();
 
-                    var cev = ev.CurrentEvent;
+                    int replayProgress = 0;
 
-                    if (timeDiff > 0)
+                    while (enumerator.MoveNext())
                     {
-                        try
+                        var ev = enumerator.Current;
+
+                        if (ev == null)
                         {
-                            Thread.Sleep((int)timeDiff);
+                            break;
                         }
-                        catch (ThreadInterruptedException)
+
+                        long timeDiff = ev.GetTimeDifference();
+
+                        var cev = ev.CurrentEvent;
+
+                        if (timeDiff > 0)
                         {
-                            return;
+                            try
+                            {
+                                Thread.Sleep((int) timeDiff);
+                            }
+                            catch (ThreadInterruptedException)
+                            {
+                                return;
+                            }
                         }
+
+                        SetCursorPos(cev.X, cev.Y);
+
+                        if (cev.Action == IMouseEvent.EventAction.CLICK)
+                        {
+                            OnMouseClick(cev.Button);
+                        }
+                        else if (cev.Action == IMouseEvent.EventAction.DOUBLE_CLICK)
+                        {
+                            OnMouseClick(cev.Button);
+                            OnMouseClick(cev.Button);
+                        }
+                        else if (cev.Action == IMouseEvent.EventAction.MOVE)
+                        {
+                            try
+                            {
+                                Trace(cev.Series);
+                            }
+                            catch (ThreadInterruptedException)
+                            {
+                                return;
+                            }
+                        }
+                        else if (cev.Action == IMouseEvent.EventAction.DRAG)
+                        {
+                            OnMouseDown(cev.Button);
+                            try
+                            {
+                                Trace(cev.Series);
+                            }
+                            catch (ThreadInterruptedException)
+                            {
+                                return;
+                            }
+
+                            OnMouseUp(cev.Button);
+                        }
+
+
+                        replayProgress++;
+
+                        var progress = replayProgress;
+                        replayProgressBar.Invoke((MethodInvoker) (() =>
+                        {
+                            replayProgressBar.Value = progress;
+                            eventsProgressLabel.Text = String.Format(TextResources.steps_progress, progress, _mouseEvents.GetCount());
+                        }));
                     }
-
-                    SetCursorPos(cev.X, cev.Y);
-
-                    if (cev.Action == IMouseEvent.EventAction.CLICK)
-                    {
-                        OnMouseClick(cev.Button);
-                    }
-                    else if (cev.Action == IMouseEvent.EventAction.DOUBLE_CLICK)
-                    {
-                        OnMouseClick(cev.Button);
-                        OnMouseClick(cev.Button);
-                    }
-                    else if (cev.Action == IMouseEvent.EventAction.MOVE)
-                    {
-                        try
-                        {
-                            trace(cev.Series);
-                        }
-                        catch (ThreadInterruptedException)
-                        {
-                            return;
-                        }
-                    }
-                    else if (cev.Action == IMouseEvent.EventAction.DRAG) {
-
-                        OnMouseDown(cev.Button);
-                        try
-                        {
-                            trace(cev.Series);
-                        }
-                        catch (ThreadInterruptedException)
-                        {
-                            return;
-                        }
-                        OnMouseUp(cev.Button);
-                    }
-
-
-                    replayProgress++;
-
-                    replayProgressBar.Invoke((MethodInvoker)(() =>
-                    {
-                        replayProgressBar.Value = replayProgress;
-                        eventsProgressLabel.Text = replayProgress + "/" + _mouseEvents.GetCount();
-                    }));
                 }
 
                 i++;
 
-                label1.Invoke((MethodInvoker)(() => label1.Text = "Replays: " + i));
-
+                label1.Invoke((MethodInvoker) (() => label1.Text = String.Format(TextResources.replays_progress, i)));
             } while (true);
         }
 
-        private void trace(List<ITimedCoordinates> series)
+        private void Trace(List<ITimedCoordinates> series)
         {
             long lastTimestamp = 0L;
 
             foreach (var tc in series)
             {
-
                 if (lastTimestamp > 0)
                 {
                     long diff = tc.Timestamp - lastTimestamp;
 
-                    Thread.Sleep((int)diff);
+                    Thread.Sleep((int) diff);
                 }
 
                 SetCursorPos(tc.X, tc.Y);
@@ -358,43 +450,45 @@ namespace Mouse_Imitator
             }
         }
 
-        private void performRecord()
+        private void PerformRecord()
         {
-            recording = !recording;
+            if (IsRecording())
+            {
+                Unsubscribe();
+                recordButton.Text = TextResources.record;
+                replayButton.Enabled = true;
 
-            if (recording)
+                UpdateState(State.IDLE);
+            }
+            else if (IsIdle())
             {
                 _mouseEvents.Clear();
                 Subscribe();
-                recordButton.Text = "Stop Recording";
+                recordButton.Text = TextResources.stop_recording;
                 replayButton.Enabled = false;
-            }
-            else
-            {
-                Unsubscribe();
-                recordButton.Text = "Record";
-                replayButton.Enabled = true;
+
+                UpdateState(State.RECORDING);
             }
         }
 
         private void recordButton_Click(object sender, EventArgs e)
         {
-            if (replaying)
+            if (IsReplaying())
             {
                 return;
             }
 
-            if (recording)
+            if (IsRecording())
             {
                 _mouseEvents.RemoveLast();
             }
 
-            performRecord();
+            PerformRecord();
         }
 
         public void OnEventReceived(IDeviceEvent deviceEvent)
         {
-            var mouseEvent = (IMouseEvent)deviceEvent;
+            var mouseEvent = (IMouseEvent) deviceEvent;
 
 
             lock (_mouseEvents)
@@ -406,24 +500,20 @@ namespace Mouse_Imitator
         private static TData DeserializeFromString<TData>(string settings)
         {
             byte[] b = Convert.FromBase64String(settings);
-            using (var stream = new MemoryStream(b))
-            {
-                var formatter = new BinaryFormatter();
-                stream.Seek(0, SeekOrigin.Begin);
-                return (TData)formatter.Deserialize(stream);
-            }
+            using var stream = new MemoryStream(b);
+            var formatter = new BinaryFormatter();
+            stream.Seek(0, SeekOrigin.Begin);
+            return (TData) formatter.Deserialize(stream);
         }
 
         private static string SerializeToString<TData>(TData settings)
         {
-            using (var stream = new MemoryStream())
-            {
-                var formatter = new BinaryFormatter();
-                formatter.Serialize(stream, settings);
-                stream.Flush();
-                stream.Position = 0;
-                return Convert.ToBase64String(stream.ToArray());
-            }
+            using var stream = new MemoryStream();
+            var formatter = new BinaryFormatter();
+            formatter.Serialize(stream, settings);
+            stream.Flush();
+            stream.Position = 0;
+            return Convert.ToBase64String(stream.ToArray());
         }
     }
 }
